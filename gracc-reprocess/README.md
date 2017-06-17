@@ -59,7 +59,7 @@ See the alias example below for more information on usage of those arguments.
 $./gracc-reprocess -pq --size 100 gracc.osg.raw3-2017.06 http://localhost:8888/gracc
 2017-06-17 13:46:23,951 [UBER __main__] Processing index gracc.osg.raw3-2017.06
 2017-06-17 13:46:23,973 [UBER __main__] Processing 15500 records
-100% (15500 of 15500) |################################################################################################################################################| Elapsed Time: 0:01:31 ETA:  0:00:00
+100% (15500 of 15500) |########################| Elapsed Time: 0:01:31 ETA:  0:00:00
 2017-06-17 13:47:55,818 [UBER __main__] Processing complete. Sent 15500/15500 records
 ```
 
@@ -95,7 +95,8 @@ health status index                      uuid                   pri rep docs.cou
 $ ./gracc-reprocess -pq --size 100 --query 'ProbeName:"condor:fifebatch1.fnal.gov"' 'gracc.osg.raw3-*' http://localhost:8888/gracc
 2017-06-17 13:54:14,796 [UBER __main__] Processing index gracc.osg.raw3-2017.06
 2017-06-17 13:54:14,876 [UBER __main__] Processing 2279 records
-100% (2279 of 2279) |##################################################################################################################################################| Elapsed Time: 0:00:14 ETA:  0:00:002017-06-17 13:54:30,190 [UBER __main__] Processing complete. Sent 2279/2279 records
+100% (2279 of 2279) |##########################| Elapsed Time: 0:00:14 ETA:  0:00:00
+2017-06-17 13:54:30,190 [UBER __main__] Processing complete. Sent 2279/2279 records
 ```
 
 ### Reprocess and update alias
@@ -117,7 +118,8 @@ gracc.test.raw-2017.06 gracc.test.raw2-2017.06 -      -             -
 $ ./gracc-reprocess --size 100 -pq --close --alias --new_ver 3 gracc.test.raw2-2017.06 http://localhost:8888/gracc
 2017-06-17 14:06:50,536 [UBER __main__] Processing index gracc.test.raw2-2017.06
 2017-06-17 14:06:50,562 [UBER __main__] Processing 2500 records
-100% (2500 of 2500) |##################################################################################################################################################| Elapsed Time: 0:00:14 ETA:  0:00:002017-06-17 14:07:06,346 [UBER __main__] Processing complete. Sent 2500/2500 records
+100% (2500 of 2500) |##########################| Elapsed Time: 0:00:14 ETA:  0:00:00
+2017-06-17 14:07:06,346 [UBER __main__] Processing complete. Sent 2500/2500 records
 2017-06-17 14:07:06,346 [UBER __main__] moving alias gracc.test.raw-2017.06 from gracc.test.raw2-2017.06 to gracc.test.raw3-2017.06
 2017-06-17 14:07:06,876 [UBER __main__] Closing index gracc.test.raw2-2017.06
 
