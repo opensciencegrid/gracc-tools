@@ -1,0 +1,151 @@
+#!/bin/env python
+"""
+Reprocess records by extracting original XML and sending them
+back through the GRACC collector.
+
+* Get records from Elasticsearch indices
+* extract original XML
+* package into bundles
+* send to collector
+"""
+
+from argparse import ArgumentParser
+import logging
+import requests
+import traceback
+import sys
+import re
+from elasticsearch import Elasticsearch, RequestsHttpConnection
+import progressbar
+
+logger = logging.getLogger(__name__)
+
+
+class Processor(object):
+    def __init__(self, index, url, size=500, close=False, timeout=60, alias=False, alias_regex=None, new_ver=None):
+        self.index = index
+        self.url = url
+        self.size = size
+        self.close = close
+
+        self.alias = alias
+        self.alias_regex = re.compile(alias_regex)
+        self.new_ver = new_ver
+
+        self.client = Elasticsearch(timeout=timeout,connection_class=RequestsHttpConnection)
+
+    def process(self):
+        for idx in self.get_indices(self.index):
+            try:
+                logger.log(99,'Processing index %s'%idx)
+                self.process_index(idx)
+            except:
+                logger.error('Exception while processing index %s'%idx)
+                traceback.print_exc()
+                continue
+
+    def process_index(self,index):
+        s = self.client.search(index=index, 
+                _source=["RawXML"],
+                scroll="5m",
+                size=self.size)
+        all_hits = s['hits']['total']
+        logger.log(99,'Processing %d recordss'%all_hits)
+        bar = progressbar.ProgressBar(max_value=all_hits,redirect_stdout=True)
+
+        self.send_records(s['hits']['hits'])
+        sent_hits = len(s['hits']['hits'])
+        logger.info('sent %d/%d records'%(sent_hits,all_hits))
+        bar.update(sent_hits)
+
+        while True:
+            s = self.client.scroll(scroll_id=s['_scroll_id'],scroll="5m")
+            if len(s['hits']['hits']) == 0:
+                break
+            self.send_records(s['hits']['hits'])
+            sent_hits += len(s['hits']['hits'])
+            logger.info('sent %d/%d records'%(sent_hits,all_hits))
+            bar.update(sent_hits)
+        logger.log(99,'Processing complete. Sent %d/%d records'%(sent_hits,all_hits))
+        if self.alias:
+            match=self.alias_regex.match(index)
+            if not match:
+                logger.error('index [%s] does not match expected regex [%s], not updating alias'%(index,self.alias_regex.pattern))
+            else:
+                pre,post=match.groups()
+                alias='%s-%s'%(pre,post)
+                new='%s%s-%s'%(pre,self.new_ver,post)
+                logger.log(99,'moving alias %s from %s to %s'%(alias,index,new))
+                self.client.indices.put_alias(index=new,name=alias)
+                try:
+                    self.client.indices.delete_alias(index=index,name=alias)
+                except elasicsearch.NotFoundError:
+                    logger.warning('old alias does not exist to delete')
+        if self.close:
+            logger.log(99,'Closing index %s'%index)
+            self.client.indices.close(index)
+
+
+
+    def get_indices(self, index_pattern):
+        idxs = self.client.indices.get_settings(index=index_pattern)
+        return idxs.keys()
+
+    def make_bundle(self, r):
+        b = ''
+        for s in r:
+            b += 'replication|%s|%s||' % (s['_source']['RawXML'],s['_source']['RawXML'])
+        return b
+
+    def send_records(self, r):
+        b = self.make_bundle(r)
+        p = {
+            'command': 'update',
+            'from': 'gracc-reprocess',
+            'bundlesize': len(r),
+            'arg1': b,
+        }
+        url = self.url.rstrip('/')+'/gratia-servlets/rmi'
+
+        logger.debug('Posting bundle to URL %s\n%s'%(url,p))
+        res = requests.post(url, data=p)
+        res.raise_for_status()
+
+
+if __name__=="__main__":
+    parser = ArgumentParser(description='Reprocess GRACC records through collector')
+    parser.add_argument('index',help='source index pattern')
+    parser.add_argument('url',help='GRACC collector URL')
+    parser.add_argument('--size',help='Record batch size (default 500)',default=500,type=int)
+    parser.add_argument('--timeout',help='Elasticsearch timeout (default 300)',default=300,type=int)
+    parser.add_argument('--debug',help='Enable debug logging',action='store_true')
+    parser.add_argument('--quiet',help='Disable most logging (ignored if --debug specified)',action='store_true')
+    parser.add_argument('--close',help='Close index when done processing',action='store_true')
+    parser.add_argument('--alias',help='Move alias when done processing',action='store_true')
+    parser.add_argument('--alias_regex',help='RE to extract index prefix and date (for alias)',default=r'(.*)\d-(\d\d\d\d\.\d\d)')
+    parser.add_argument('--new_ver',help='Version of new indices (for alias)')
+
+    args = parser.parse_args()
+    
+    logfmt = "%(asctime)s [%(levelname)s %(name)s] %(message)s"
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG, format=logfmt)
+    elif args.quiet:
+        logging.basicConfig(level=logging.ERROR, format=logfmt)
+    else:
+        logging.basicConfig(level=logging.INFO, format=logfmt)
+    logging.addLevelName(99,'UBER')
+
+    if args.alias and args.new_ver is None:
+        logger.error('must specify --new_ver with --alias')
+        sys.exit(1)
+
+    processor = Processor(index=args.index,
+            url=args.url,
+            size=args.size,
+            close=args.close,
+            timeout=args.timeout,
+            alias=args.alias,
+            alias_regex=args.alias_regex,
+            new_ver=args.new_ver)
+    processor.process()
