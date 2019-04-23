@@ -153,7 +153,10 @@ corrections = {
                      correction='CorrectedVOName'),
     'project': Correction(ctype='project',
                           key='ProjectName',
-                          correction='CorrectedProjectName')
+                          correction='CorrectedProjectName'),
+    'host': Correction(ctype='host_description_regex',
+                        key='Host_description',
+                        correction='Corrected_OIM_Site')
 }
 
 def main():
