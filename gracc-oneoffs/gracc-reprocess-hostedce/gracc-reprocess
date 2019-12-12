@@ -1,0 +1,233 @@
+#!/usr/bin/env python
+"""
+Reprocess records by extracting original XML and sending them
+back through the GRACC collector.
+
+* Get records from Elasticsearch indices
+* extract original XML
+* package into bundles
+* send to collector
+"""
+
+from argparse import ArgumentParser
+import logging
+import requests
+import traceback
+import sys
+import re
+from elasticsearch import Elasticsearch, RequestsHttpConnection
+import progressbar
+import xml.etree.ElementTree as ET
+import dateutil.parser
+import isodate
+
+logger = logging.getLogger(__name__)
+
+
+class Processor(object):
+    def __init__(self, index, url, size=500, close=False, timeout=60, progress=False, query=None,
+                 alias=False, alias_regex=None, new_ver=None, es_url=None):
+        self.index = index
+        self.url = url
+        self.size = size
+        self.close = close
+        self.progress = progress
+
+        self.query = query
+
+        self.alias = alias
+        self.alias_regex = re.compile(alias_regex)
+        self.new_ver = new_ver
+
+        if es_url:
+            self.client = Elasticsearch(es_url, timeout=timeout,connection_class=RequestsHttpConnection)
+        else:
+            self.client = Elasticsearch(timeout=timeout,connection_class=RequestsHttpConnection)
+
+    def process(self):
+        for idx in self.get_indices(self.index):
+            try:
+                logger.log(99,'Processing index %s'%idx)
+                self.process_index(idx)
+            except:
+                logger.error('Exception while processing index %s'%idx)
+                traceback.print_exc()
+                continue
+
+    def process_index(self,index):
+        s = self.client.search(index=index,
+                _source=["RawXML"],
+                q=self.query,
+                scroll="5m",
+                size=self.size)
+        all_hits = s['hits']['total']
+        if all_hits > 0:
+            logger.log(99,'Processing %d records'%all_hits)
+            if self.progress:
+                bar = progressbar.ProgressBar(max_value=all_hits,redirect_stdout=True)
+
+            self.send_records(s['hits']['hits'])
+            sent_hits = len(s['hits']['hits'])
+            logger.info('sent %d/%d records'%(sent_hits,all_hits))
+            if self.progress:
+                bar.update(sent_hits)
+
+            while True:
+                s = self.client.scroll(scroll_id=s['_scroll_id'],scroll="5m")
+                if len(s['hits']['hits']) == 0:
+                    break
+                self.send_records(s['hits']['hits'])
+                sent_hits += len(s['hits']['hits'])
+                logger.info('sent %d/%d records'%(sent_hits,all_hits))
+                if self.progress:
+                    bar.update(sent_hits)
+            logger.log(99,'Processing complete. Sent %d/%d records'%(sent_hits,all_hits))
+        else:
+            logger.log(99,'No records found')
+
+        if self.alias:
+            match=self.alias_regex.match(index)
+            if not match:
+                logger.error('index [%s] does not match expected regex [%s], not updating alias'%(index,self.alias_regex.pattern))
+            else:
+                pre,post=match.groups()
+                alias='%s-%s'%(pre,post)
+                new='%s%s-%s'%(pre,self.new_ver,post)
+                logger.log(99,'moving alias %s from %s to %s'%(alias,index,new))
+                self.client.indices.put_alias(index=new,name=alias)
+                try:
+                    self.client.indices.delete_alias(index=index,name=alias)
+                except elasicsearch.NotFoundError:
+                    logger.warning('old alias does not exist to delete')
+
+        if self.close:
+            logger.log(99,'Closing index %s'%index)
+            self.client.indices.close(index)
+
+
+
+    def get_indices(self, index_pattern):
+        idxs = self.client.indices.get_settings(index=index_pattern)
+        return idxs.keys()
+
+    def process_xml(self, xml):
+        """
+        Input: raw xml as a string
+        returns: corrected xml, as string
+        """
+        ET.register_namespace("urwg", "http://www.gridforum.org/2003/ur-wg")
+        # Add namespace information to the top
+        # XML parsing is hard with namespaces!
+        new_xml = xml.replace("<JobUsageRecord>", '<JobUsageRecord xmlns:urwg="http://www.gridforum.org/2003/ur-wg">', 1)
+        #print(xml)
+        root = ET.fromstring(new_xml)
+        # Parse the XML
+
+        # Correct the Processors - 28 cores per job
+        #print(root.find("Processors").text)
+        root.find("Processors").text = "28"
+        #root.getElementsByTagName("Processors") = 28
+
+        # Calculate the StartTime
+        if root.find("StartTime") is None:
+            # Check for EndTime, we must have that at least
+            if root.find("EndTime") is None:
+                #print("Record without EndTime")
+                #print(xml)
+                return xml
+            if root.find("WallDuration") is None:
+                #print("Record without WallDuration")
+                return xml
+            
+            endtime = dateutil.parser.parse(root.find("EndTime").text)
+            wallduration = isodate.parse_duration(root.find("WallDuration").text)
+            starttime = endtime - wallduration
+            # <StartTime urwg:description="Was entered in seconds">2019-12-12T01:35:52Z</StartTime>
+            starttime_el = ET.Element('StartTime')
+            starttime_el.attrib['urwg:description']="Was entered in seconds"
+            starttime_el.text = starttime.isoformat()
+            #print(starttime_el)
+            root.append(starttime_el)
+
+        # Translate back into a string
+        return_xml = ET.tostring(root).decode()
+
+        # Remove the namespace info
+        return_xml = return_xml.replace('<JobUsageRecord xmlns:urwg="http://www.gridforum.org/2003/ur-wg">', '<JobUsageRecord>', 1)
+        #print(return_xml)
+        return return_xml
+
+
+    def make_bundle(self, r):
+        b = ''
+        for s in r:
+            corrected = self.process_xml(s['_source']['RawXML'])
+            b += 'replication|%s|%s||' % (corrected,corrected)
+        return b
+
+    def send_records(self, r):
+        b = self.make_bundle(r)
+        p = {
+            'command': 'update',
+            'from': 'gracc-reprocess',
+            'bundlesize': len(r),
+            'arg1': b,
+        }
+        url = self.url.rstrip('/')+'/gratia-servlets/rmi'
+
+        logger.debug('Posting bundle to URL %s\n%s'%(url,p))
+        res = requests.post(url, data=p)
+        #print(p)
+        res.raise_for_status()
+
+
+if __name__=="__main__":
+    parser = ArgumentParser(description='Reprocess GRACC records through collector')
+    parser.add_argument('index',help='source index pattern')
+    parser.add_argument('url',help='GRACC collector URL')
+
+    parser.add_argument('--es_url',help='GRACC Elasticsearch URL', default=None)
+    parser.add_argument('--size',help='Record batch size (default 500)',default=500,type=int)
+    parser.add_argument('--timeout',help='Elasticsearch timeout (default 300)',default=300,type=int)
+    parser.add_argument('--debug',help='Enable debug logging',action='store_true')
+    parser.add_argument('-q','--quiet',help='Disable most logging (ignored if --debug specified)',action='store_true')
+    parser.add_argument('-p','--progress',help='Display progressbar',action='store_true')
+
+    parser.add_argument('--close',help='Close index when done processing',action='store_true')
+    parser.add_argument('--query',help='Limit reporecessed records by query_string',type=str,default=None)
+
+    parser.add_argument('--alias',help='Move alias when done processing',action='store_true')
+    parser.add_argument('--alias_regex',help='RE to extract index prefix and date (for alias)',default=r'(.*)\d-(\d\d\d\d\.\d\d)')
+    parser.add_argument('--new_ver',help='Version of new indices (for alias)')
+
+    args = parser.parse_args()
+
+    if args.progress and not args.quiet:
+        ## verbose logging will interrupt the progressbar if we don't wrap it
+        progressbar.streams.wrap_stderr()
+
+    logfmt = "%(asctime)s [%(levelname)s %(name)s] %(message)s"
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG, format=logfmt)
+    elif args.quiet:
+        logging.basicConfig(level=logging.ERROR, format=logfmt)
+    else:
+        logging.basicConfig(level=logging.INFO, format=logfmt)
+    logging.addLevelName(99,'UBER')
+
+    if args.alias and args.new_ver is None:
+        logger.error('must specify --new_ver with --alias')
+        sys.exit(1)
+
+    processor = Processor(index=args.index,
+                          url=args.url,
+                          es_url=args.es_url,
+                          size=args.size,
+                          close=args.close,
+                          timeout=args.timeout,
+                          alias=args.alias,
+                          alias_regex=args.alias_regex,
+                          new_ver=args.new_ver,
+                          progress=args.progress,
+                          query=args.query)
+    processor.process()
