@@ -3,7 +3,10 @@
 This is modified for fixing some hosted-ce records.  Not the original gracc-reprocess
 
 Ran with this command:
+
+```
 ./gracc-reprocess "gracc.osg.raw3-quarantine" http://gratia-osg-prod.opensciencegrid.org --query 'ProbeName:"htcondor-ce:hosted-ce13.grid.uchicago.edu"' --es_url "https://gracc.opensciencegrid.org/q"
+```
 
 # Original README.md below
 
