@@ -30,3 +30,16 @@ for hit in s.scan():
     print("WallDuration: {} hours".format(hit['WallDuration'] / 3600))
     es.delete(index=hit.meta.index, doc_type=hit.meta.doc_type, id=hit.meta.id)
 
+
+s = Search(using=es, index=osg_summary_index)
+
+s = s.query("match", ProbeName="slurm:grid1.oscer.ou.edu")
+s = s.filter('range', EndTime={'from': 'now-7d', 'to': 'now'})
+
+response = s.execute()
+print("Query took {} milliseconds".format(response.took))
+
+print("Query got {} hits".format(response.hits.total))
+for hit in s.scan():
+    print("WallDuration: {} hours".format(hit['WallDuration'] / 3600))
+    es.delete(index=hit.meta.index, doc_type=hit.meta.doc_type, id=hit.meta.id)
