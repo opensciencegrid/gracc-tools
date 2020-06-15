@@ -3,6 +3,7 @@
 import argparse
 import sys
 import json
+import csv
 
 from elasticsearch import Elasticsearch
 
@@ -114,7 +115,7 @@ class Correction(object):
             for k in doc.keys():
                 if k not in self.keys():
                     print 'Error: invalid key %s for correction %s' % (k, self.ctype)
-            q += ' AND ' + ' AND '.join([k+':'+v for k, v in doc.iteritems() if k != self.correction])
+            q += ' AND ' + ' AND '.join([k+':"'+v+'"' for k, v in doc.iteritems() if k != self.correction])
 
         r = es.search(index=index, doc_type=self.ctype, q=q, size=size)
         try:
@@ -145,6 +146,26 @@ class Correction(object):
                 d[k]=v
         return d
 
+    def parse_csv(self, csv_path):
+        """
+        Parse a CSV file and return a list of conforming docs.  CSV format must be key, other_key, correction
+        """
+
+        docs = []
+        with open(csv_path, 'r') as csvfile:
+            reader = csv.reader(csvfile, delimiter=',')
+            for row in reader:
+                doc = {}
+                doc[self.key] = row[0]
+                index = 1
+                for key in self.other_keys:
+                    doc[key] = row[index]
+                    index += 1
+                doc[self.correction] = row[index]
+                docs.append(doc)
+        return docs
+
+
 
 corrections = {
     'vo': Correction(ctype='vo',
@@ -156,7 +177,10 @@ corrections = {
                           correction='CorrectedProjectName'),
     'host': Correction(ctype='host_description_regex',
                         key='Host_description',
-                        correction='Corrected_OIM_Site')
+                        correction='Corrected_OIM_Site'),
+    'reportablevoname': Correction(ctype='reportablevoname',
+                        key='ReportableVOName',
+                        correction='CorrectedReportableVOName')
 }
 
 def main():
@@ -180,6 +204,8 @@ def main():
     add_parser = subparsers.add_parser('add',help='create new correction')
     add_parser.add_argument('--doc', type=str, default=None,
                         help='Optional JSON document with correction source to add.')
+    add_parser.add_argument('--csv', type=str, default=None,
+                        help='Optional CSV document with correction source to add.')
 
     update_parser = subparsers.add_parser('update',help='update existing correction')
     update_parser.add_argument('--doc', type=str, default=None,
@@ -190,6 +216,8 @@ def main():
                         help='Optional JSON document with correction source to delete.')
     delete_parser.add_argument('--id', type=str, default=None,
                         help='Document id to delete.')
+    delete_parser.add_argument('--csv', type=str, default=None,
+                        help='Optional CSV document with correction source to delete.')
 
     args = parser.parse_args()
 
@@ -197,6 +225,8 @@ def main():
     correction = corrections[args.type]
     if args.doc is not None:
         doc = json.loads(args.doc)
+    elif (args.command == 'add' or args.command == 'delete') and args.csv:
+        csv = args.csv
     elif args.command == 'list':
         doc = {}
     elif args.command == 'delete' and args.id is not None:
@@ -209,7 +239,11 @@ def main():
         for d in docs:
             print d['_id'],json.dumps(correction.filter(d['_source']))
     elif args.command == 'add':
-        if not correction.create(es,args.index,doc):
+        if args.csv:
+            docs = correction.parse_csv(args.csv)
+            for doc in docs:
+                correction.create(es, args.index,doc)
+        elif not correction.create(es,args.index,doc):
             if raw_input('Create failed. Attempt update instead? (Y/N) ').upper() == 'Y':
                 correction.update(es,args.index,doc)
     elif args.command == 'update':
@@ -217,7 +251,12 @@ def main():
             if raw_input('Update failed. Attempt create instead? (Y/N) ').upper() == 'Y':
                 correction.create(es,args.index,doc)
     elif args.command == 'delete':
-        correction.destroy(es,args.index,doc,id=args.id)
+        if args.csv:
+            docs = correction.parse_csv(args.csv)
+            for doc in docs:
+                correction.destroy(es, args.index,doc)
+        else:
+            correction.destroy(es,args.index,doc,id=args.id)
     else:
         print '%s not implemented'%args.command
         sys.exit(1)
