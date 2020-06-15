@@ -32,7 +32,8 @@ class Correction(object):
             print 'Error: correction exists'
             return False
         ## create doc
-        r = es.index(index=index, doc_type=self.ctype, body=doc)
+        doc['type'] = self.ctype
+        r = es.index(index=index, body=doc)
         if r['_shards']['successful'] < 1:
             print 'Error creating correction. Response:'
             print r
@@ -56,7 +57,8 @@ class Correction(object):
             print 'Error: correction doesn\'t exist'
             return False
         for d in docs:
-            r = es.update(index=index, doc_type=self.ctype, id=d['_id'], body={'doc':doc})
+            doc['type'] = self.ctype
+            r = es.update(index=index, id=d['_id'], body={'doc':doc})
             if r['result'] not in ['updated','noop']:
                 print 'Error updating correction. Response:'
                 print r
@@ -89,7 +91,7 @@ class Correction(object):
             print self.filter(d['_source'])
             if raw_input('Delete record? (Y/N) ').upper() != 'Y':
                 continue
-            r = es.delete(index=index, doc_type=self.ctype, id=d['_id'])
+            r = es.delete(index=index, id=d['_id'])
             if r['_shards']['successful'] < 1:
                 print 'Error deleting correction. Response:'
                 print r
@@ -117,7 +119,7 @@ class Correction(object):
                     print 'Error: invalid key %s for correction %s' % (k, self.ctype)
             q += ' AND ' + ' AND '.join([k+':"'+v+'"' for k, v in doc.iteritems() if k != self.correction])
 
-        r = es.search(index=index, doc_type=self.ctype, q=q, size=size)
+        r = es.search(index=index, q=q, size=size)
         try:
             return r['hits']['hits']
         except:
