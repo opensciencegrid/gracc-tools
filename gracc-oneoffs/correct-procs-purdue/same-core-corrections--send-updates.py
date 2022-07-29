@@ -25,7 +25,7 @@ def main():
     #a = A('terms', field="LocalJobId", size=1000000)
     # Grab all the jobs from a specific probe
     probe_name = sys.argv[1]
-    s = Search(using=es, index=osg_raw_index)
+    s = Search(using=es, index=osg_raw_index).extra(from_=0, size=10000)
     s = s.filter('range', EndTime={'from': '2022-06-22', 'to': 'now'})
     s = s.filter('match', Processors=1)
     s = s.query('match', ProbeName=probe_name)
@@ -33,6 +33,7 @@ def main():
     print(response.success())
     print(response.took)
     print(response.hits.total.value)
+    print(len(response.hits.hits))
 
     cores = int(sys.argv[2])
     gain_in_coreHours = 0.0
