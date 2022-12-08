@@ -1,4 +1,4 @@
-certifi==2021.10.8
+certifi==2022.12.7
 elasticsearch==7.17.3
 elasticsearch-dsl==7.4.0
 python-dateutil==2.8.2
