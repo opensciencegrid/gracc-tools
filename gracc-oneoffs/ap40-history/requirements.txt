@@ -1,0 +1,4 @@
+elasticsearch~=6.3
+elasticsearch_dsl~=6.2
+requests
+python-dateutil
