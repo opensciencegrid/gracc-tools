@@ -1,0 +1,345 @@
+{
+  "index_patterns": [
+    "gracc.osg.summary*"
+  ],
+  "template": {
+    "settings": {
+      "index": {
+        "refresh_interval": "60s",
+        "number_of_shards": "3",
+        "translog": {
+          "sync_interval": "5s",
+          "durability": "async"
+        },
+        "number_of_replicas": "2"
+      }
+    },
+    "aliases": {
+      "gracc.osg.summary": {}
+    },
+    "mappings": {
+      "dynamic_templates": [
+        {
+          "string_fields": {
+            "mapping": {
+              "type": "keyword"
+            },
+            "match_mapping_type": "string",
+            "match": "*"
+          }
+        },
+        {
+          "float_fields": {
+            "mapping": {
+              "type": "float",
+              "doc_values": true
+            },
+            "match_mapping_type": "double",
+            "match": "*"
+          }
+        },
+        {
+          "double_fields": {
+            "mapping": {
+              "type": "double",
+              "doc_values": true
+            },
+            "match_mapping_type": "double",
+            "match": "*"
+          }
+        },
+        {
+          "long_fields": {
+            "mapping": {
+              "type": "long",
+              "doc_values": true
+            },
+            "match_mapping_type": "long",
+            "match": "*"
+          }
+        },
+        {
+          "date_fields": {
+            "mapping": {
+              "type": "date",
+              "doc_values": true
+            },
+            "match_mapping_type": "date",
+            "match": "*"
+          }
+        }
+      ],
+      "properties": {
+        "SubmitHost": {
+          "type": "keyword"
+        },
+        "SiteName": {
+          "type": "keyword"
+        },
+        "Queue_description": {
+          "type": "text"
+        },
+        "CoreHours": {
+          "type": "double"
+        },
+        "GPUHours": {
+          "type": "double"
+        },
+        "Memory": {
+          "type": "double"
+        },
+        "DN": {
+          "type": "keyword"
+        },
+        "TimeDuration_CommittedSuspensionTime": {
+          "type": "double"
+        },
+        "type": {
+          "type": "keyword"
+        },
+        "Swap": {
+          "type": "double"
+        },
+        "TimeDuration_RemoteSysCpu": {
+          "type": "double"
+        },
+        "Network": {
+          "type": "double"
+        },
+        "Swap_phaseUnit": {
+          "type": "long"
+        },
+        "TimeInstant_unknown": {
+          "format": "strict_date_optional_time||epoch_millis",
+          "type": "date"
+        },
+        "Network_phaseUnit": {
+          "type": "double"
+        },
+        "Status_description": {
+          "type": "text"
+        },
+        "WallDuration": {
+          "type": "long"
+        },
+        "Status": {
+          "type": "long"
+        },
+        "GlobalJobId": {
+          "type": "keyword"
+        },
+        "CpuDuration_system": {
+          "type": "double"
+        },
+        "TimeDuration_CumulativeSuspensionTime": {
+          "type": "double"
+        },
+        "NodeCount": {
+          "type": "keyword"
+        },
+        "StartTime": {
+          "format": "strict_date_optional_time||epoch_millis",
+          "type": "date"
+        },
+        "Memory_description": {
+          "type": "text"
+        },
+        "GlobalUsername": {
+          "type": "keyword"
+        },
+        "Swap_storageUnit": {
+          "type": "keyword"
+        },
+        "MachineName": {
+          "type": "keyword"
+        },
+        "Resource_ExitSignal": {
+          "type": "long"
+        },
+        "Processors_metric": {
+          "type": "keyword"
+        },
+        "ProjectName_description": {
+          "type": "text"
+        },
+        "Network_metric": {
+          "type": "keyword"
+        },
+        "Processors": {
+          "type": "long"
+        },
+        "Network_description": {
+          "type": "text"
+        },
+        "ServiceLevel": {
+          "type": "keyword"
+        },
+        "Memory_phaseUnit": {
+          "type": "double"
+        },
+        "TimeDuration_CommittedTime": {
+          "type": "double"
+        },
+        "TimeInstant_submit": {
+          "format": "strict_date_optional_time||epoch_millis",
+          "type": "date"
+        },
+        "EndTime": {
+          "format": "strict_date_optional_time||epoch_millis",
+          "type": "date"
+        },
+        "ProjectName": {
+          "type": "keyword"
+        },
+        "Resource_condor-JobStatus": {
+          "type": "long"
+        },
+        "@received": {
+          "format": "strict_date_optional_time||epoch_millis",
+          "type": "date"
+        },
+        "LocalUserId": {
+          "type": "keyword"
+        },
+        "Grid": {
+          "type": "keyword"
+        },
+        "JobName": {
+          "type": "keyword"
+        },
+        "PayloadSiteName": {
+          "type": "keyword"
+        },
+        "Resource_Protocol": {
+          "type": "keyword"
+        },
+        "Resource_ExitBySignal": {
+          "type": "boolean"
+        },
+        "Swap_metric": {
+          "type": "keyword"
+        },
+        "Host_description": {
+          "type": "keyword"
+        },
+        "ProbeName": {
+          "type": "keyword"
+        },
+        "Grid_description": {
+          "type": "text"
+        },
+        "TimeDuration_LocalUserCpu": {
+          "type": "double"
+        },
+        "ServiceLevel_description": {
+          "type": "text"
+        },
+        "@version": {
+          "type": "keyword"
+        },
+        "Resource_IsNew": {
+          "type": "keyword"
+        },
+        "checksum": {
+          "index": "false",
+          "type": "text"
+        },
+        "Memory_metric": {
+          "type": "keyword"
+        },
+        "VOName": {
+          "type": "keyword"
+        },
+        "RecordId": {
+          "type": "keyword"
+        },
+        "CpuDuration": {
+          "type": "double"
+        },
+        "Queue": {
+          "type": "keyword"
+        },
+        "TimeDuration_LocalSysCpu": {
+          "type": "double"
+        },
+        "CommonName": {
+          "type": "keyword"
+        },
+        "CpuDuration_user_description": {
+          "type": "text"
+        },
+        "CpuDuration_user": {
+          "type": "double"
+        },
+        "NodeCount_metric": {
+          "type": "keyword"
+        },
+        "MachineName_description": {
+          "type": "text"
+        },
+        "CreateTime": {
+          "format": "strict_date_optional_time||epoch_millis",
+          "type": "date"
+        },
+        "TimeInstant_unknown_description": {
+          "type": "text"
+        },
+        "Host": {
+          "type": "keyword"
+        },
+        "ReportableVOName": {
+          "type": "keyword"
+        },
+        "ResourceType": {
+          "type": "keyword"
+        },
+        "TimeInstant_submit_description": {
+          "type": "text"
+        },
+        "Network_storageUnit": {
+          "type": "keyword"
+        },
+        "Resource_Destination": {
+          "type": "keyword"
+        },
+        "Memory_storageUnit": {
+          "type": "keyword"
+        },
+        "TimeDuration_RemoteUserCpu": {
+          "type": "double"
+        },
+        "LocalJobId": {
+          "type": "keyword"
+        },
+        "CpuDuration_system_description": {
+          "type": "text"
+        },
+        "Resource_AccountingGroup": {
+          "type": "keyword"
+        },
+        "@timestamp": {
+          "format": "strict_date_optional_time||epoch_millis",
+          "type": "date"
+        },
+        "Resource_Source": {
+          "type": "keyword"
+        },
+        "Resource_ExitCode": {
+          "type": "long"
+        },
+        "Resource_CondorMyType": {
+          "type": "keyword"
+        },
+        "Resource_LocalUserGroup": {
+          "type": "keyword"
+        },
+        "WallDuration_description": {
+          "type": "text"
+        },
+        "GPUs": {
+          "type": "long"
+        }
+      }
+    }
+  }
+}
