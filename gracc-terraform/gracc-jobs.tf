@@ -1,8 +1,11 @@
-#resource "opensearch_user" "gracc-writer" {
-#  username    = "gracc-writer"
-#  password    = ""
-#  description = "Read and Write to GRACC indexes"
-#}
+resource "opensearch_user" "gracc-writer" {
+  username    = "gracc-writer"
+  password    = ""
+  description = "Read and Write to GRACC indexes"
+  lifecycle {
+    ignore_changes = [password]
+  }
+}
 
 # And a full user, role and role mapping example:
 resource "opensearch_role" "gracc-writer" {
@@ -19,14 +22,17 @@ resource "opensearch_role" "gracc-writer" {
 resource "opensearch_roles_mapping" "gracc-writer" {
   role_name     = "gracc-writer"
   backend_roles = [opensearch_role.gracc-writer.role_name]
-  users         = [opensearch_user.gracc-writer.username]
+  users         = ["gracc-writer"]
 }
 
-#resource "opensearch_user" "gracc-ingest" {
-#  username    = "gracc-ingest"
-#  password    = ""
-#  description = "Read and Write to GRACC indexes"
-#}
+resource "opensearch_user" "gracc-ingest" {
+  username    = "gracc-ingest"
+  password    = ""
+  description = "Read and Write to GRACC indexes"
+  lifecycle {
+    ignore_changes = [password]
+  }
+}
 
 # And a full user, role and role mapping example:
 resource "opensearch_role" "gracc-ingest" {
@@ -44,7 +50,7 @@ resource "opensearch_role" "gracc-ingest" {
 resource "opensearch_roles_mapping" "gracc-ingest" {
   role_name     = "gracc-ingest"
   backend_roles = [opensearch_role.gracc-ingest.role_name]
-  users         = [opensearch_user.gracc-ingest.username]
+  users         = ["gracc-ingest"]
 }
 
 

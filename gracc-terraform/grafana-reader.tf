@@ -1,8 +1,11 @@
-#resource "opensearch_user" "grafana-reader" {
-#  username    = "grafana-reader"
-#  password    = ""
-#  description = "Read all indexes required for Grafana, job and data indexes"
-#}
+resource "opensearch_user" "grafana-reader" {
+  username    = "grafana-reader"
+  password    = ""
+  description = "Read all indexes required for Grafana, job and data indexes"
+  lifecycle {
+    ignore_changes = [password]
+  }
+}
 
 # And a full user, role and role mapping example:
 resource "opensearch_role" "grafana-reader" {
@@ -20,5 +23,5 @@ resource "opensearch_role" "grafana-reader" {
 resource "opensearch_roles_mapping" "grafana-reader" {
   role_name     = "grafana-reader"
   backend_roles = [opensearch_role.grafana-reader.role_name]
-  users         = [opensearch_user.grafana-reader.username]
+  users         = ["grafana-reader"]
 }
