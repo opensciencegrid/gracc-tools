@@ -5,7 +5,7 @@ import sys
 import json
 import csv
 
-from elasticsearch import Elasticsearch
+from opensearchpy import OpenSearch
 
 
 class Correction(object):
@@ -26,20 +26,20 @@ class Correction(object):
         """
         for k in self.keys():
             if k not in doc.keys():
-                print 'Error: missing key %s'%k
+                print(f'Error: missing key {k}')
                 return False
         if len(self.get(es,index,doc)) > 0:
-            print 'Error: correction exists'
+            print('Error: correction exists')
             return False
         ## create doc
         doc['type'] = self.ctype
         r = es.index(index=index, body=doc)
         if r['_shards']['successful'] < 1:
-            print 'Error creating correction. Response:'
-            print r
+            print('Error creating correction. Response:')
+            print(r)
             return False
         else:
-            print 'Correction created. id: %s' % r['_id']
+            print(f'Correction created. id: {r["_id"]}')
         return True
 
     def update(self, es, index, doc):
@@ -50,21 +50,21 @@ class Correction(object):
         """
         for k in self.keys():
             if k not in doc.keys():
-                print 'Error: missing key %s'%k
+                print('Error: missing key {k}')
                 return False
         docs = self.get(es,index,doc)
         if len(docs) == 0:
-            print 'Error: correction doesn\'t exist'
+            print('Error: correction doesn\'t exist')
             return False
         for d in docs:
             doc['type'] = self.ctype
             r = es.update(index=index, id=d['_id'], body={'doc':doc})
             if r['result'] not in ['updated','noop']:
-                print 'Error updating correction. Response:'
-                print r
+                print('Error updating correction. Response:')
+                print(r)
                 return False
             else:
-                print 'Correction %s updated.' % d['_id']
+                print(f'Correction {d["_id"]} updated.')
         return True
 
     def destroy(self, es, index, doc=None, id=None):
@@ -76,28 +76,28 @@ class Correction(object):
         if doc is not None:
             for k in self.keys():
                 if k not in doc.keys():
-                    print 'Error: missing key %s'%k
+                    print('Error: missing key {k}')
                     return False
             docs = self.get(es,index,doc)
         elif id is not None:
             docs = self.get(es,index,query='_id:%s'%id)
         else:
-            print 'Error: destroy() requires either doc or id'
+            print('Error: destroy() requires either doc or id')
             return False
         if len(docs) == 0:
-            print 'Error: correction doesn\'t exist'
+            print('Error: correction doesn\'t exist')
             return False
         for d in docs:
-            print self.filter(d['_source'])
-            if raw_input('Delete record? (Y/N) ').upper() != 'Y':
+            print(self.filter(d['_source']))
+            if input('Delete record? (Y/N) ').upper() != 'Y':
                 continue
             r = es.delete(index=index, id=d['_id'])
             if r['_shards']['successful'] < 1:
-                print 'Error deleting correction. Response:'
-                print r
+                print('Error deleting correction. Response:')
+                print(r)
                 return False
             else:
-                print 'Correction %s deleted.' % r['_id']
+                print(f'Correction {r["_id"]} deleted.')
         return True
 
     def get(self, es, index, doc={}, size=100, query=None):
@@ -116,11 +116,14 @@ class Correction(object):
         if len(doc.keys()) > 0:
             for k in doc.keys():
                 if k not in self.keys():
-                    print 'Error: invalid key %s for correction %s' % (k, self.ctype)
-            q += ' AND ' + ' AND '.join([k+':"'+v+'"' for k, v in doc.iteritems() if k != self.correction])
+                    print(f'Error: invalid key {k} for correction {self.ctype}')
+            q += ' AND ' + ' AND '.join([k+':"'+v+'"' for k, v in iter(doc.items()) if k != self.correction])
+        
+        print(f'Query: {q}')
 
         r = es.search(index=index, q=q, size=size)
         try:
+            print(r)
             return r['hits']['hits']
         except:
             return []
@@ -133,8 +136,8 @@ class Correction(object):
         doc={}
         print('Field(s) to correct:')
         for k in [self.key]+self.other_keys:
-            doc[k] = raw_input('    %s: '%k)
-        doc[self.correction] = raw_input('Corrected %s: '%self.key)
+            doc[k] = input('    %s: '%k)
+        doc[self.correction] = input('Corrected %s: '%self.key)
         return doc
 
     def filter(self, doc):
@@ -143,7 +146,7 @@ class Correction(object):
         :return dict: filtered doc
         """
         d = {}
-        for k,v in doc.iteritems():
+        for k,v in iter(doc.items()):
             if k in self.keys():
                 d[k]=v
         return d
@@ -190,7 +193,11 @@ def main():
     parser.add_argument('type', choices=corrections.keys(),
                         help='Correction type')
     parser.add_argument('--url', type=str, default='http://localhost:9200',
-                        help='Elasticsearch URL')
+                        help='OpenSearch URL')
+    parser.add_argument('--username', type=str, default=None,
+                        help='OpenSearch username')
+    parser.add_argument('--password', type=str, default=None,
+                        help='OpenSearch password')
     parser.add_argument('--index', type=str, default='gracc.corrections-0',
                         help='Index containing corrections')
     subparsers = parser.add_subparsers(dest='command')
@@ -223,7 +230,10 @@ def main():
 
     args = parser.parse_args()
 
-    es = Elasticsearch(args.url)
+    auth = (args.username, args.password)
+    es = OpenSearch(
+        hosts = [args.url],
+        http_auth = auth)
     correction = corrections[args.type]
     if args.doc is not None:
         doc = json.loads(args.doc)
@@ -239,18 +249,18 @@ def main():
     if args.command == 'list':
         docs = correction.get(es,args.index,doc,size=args.size,query=args.query)
         for d in docs:
-            print d['_id'],json.dumps(correction.filter(d['_source']))
+            print(d['_id'],json.dumps(correction.filter(d['_source'])))
     elif args.command == 'add':
         if args.csv:
             docs = correction.parse_csv(args.csv)
             for doc in docs:
                 correction.create(es, args.index,doc)
         elif not correction.create(es,args.index,doc):
-            if raw_input('Create failed. Attempt update instead? (Y/N) ').upper() == 'Y':
+            if input('Create failed. Attempt update instead? (Y/N) ').upper() == 'Y':
                 correction.update(es,args.index,doc)
     elif args.command == 'update':
         if not correction.update(es,args.index,doc):
-            if raw_input('Update failed. Attempt create instead? (Y/N) ').upper() == 'Y':
+            if input('Update failed. Attempt create instead? (Y/N) ').upper() == 'Y':
                 correction.create(es,args.index,doc)
     elif args.command == 'delete':
         if args.csv:
@@ -260,7 +270,7 @@ def main():
         else:
             correction.destroy(es,args.index,doc,id=args.id)
     else:
-        print '%s not implemented'%args.command
+        print(f'{args.command} not implemented')
         sys.exit(1)
 
 
