@@ -53,7 +53,34 @@
               "number_of_replicas": 1
             },
             "shrink": {
-              "num_new_shards": 2
+              "num_new_shards": 2,
+              "target_index": "{{ctx.index}}_shrunken",
+              "copy_alias": true
+            }
+          }
+        ],
+        "transitions": [
+          {
+            "state_name": "post_shrink"
+          }
+        ]
+      },
+      {
+        "name": "post_shrink",
+        "actions": [
+          {
+            "wait_for": {
+              "indices": [
+                "{{ctx.index}}_shrunken"
+              ],
+              "wait_for_active_shards": "all",
+              "wait_for_status": "green",
+              "timeout": "2m"
+            }
+          },
+          {
+            "delete": {
+              "index": "{{ctx.index}}"
             }
           }
         ],
