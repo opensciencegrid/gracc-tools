@@ -30,9 +30,38 @@
         ],
         "transitions": [
           {
-            "state_name": "cold",
+            "state_name": "warm",
             "conditions": {
               "min_rollover_age": "7d"
+            }
+          }
+        ]
+      },
+      {
+        "name": "warm",
+        "actions": [
+          {
+            "retry": {
+              "count": 3,
+              "backoff": "exponential",
+              "delay": "1m"
+            },
+            "force_merge": {
+              "max_num_segments": 1
+            },
+            "replica_count": {
+              "number_of_replicas": 1
+            },
+            "shrink": {
+              "num_new_shards": 2
+            }
+          }
+        ],
+        "transitions": [
+          {
+            "state_name": "cold",
+            "conditions": {
+              "min_rollover_age": "90d"
             }
           }
         ]
