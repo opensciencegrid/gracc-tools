@@ -1,27 +1,32 @@
-import elasticsearch
-from elasticsearch_dsl import Search, Q
+#!/usr/bin/env python3
 
+import opensearchpy
+from opensearchpy.helpers.query import Match
 
+# HTTP debug logging
+# import http.client as http_client
+# http_client.HTTPConnection.debuglevel = 1
 
-es = elasticsearch.Elasticsearch(
-        ['https://gracc.opensciencegrid.org/q'],
-        timeout=300, use_ssl=True, verify_certs=False)
+client = opensearchpy.OpenSearch(
+    ["https://gracc.opensciencegrid.org/q"],
+    timeout=300,
+    use_ssl=True,
+    verify_certs=True,
+)
 
-osg_raw_index = 'gracc.osg.raw-*'
+OSG_RAW_INDEX = "gracc.osg.raw3-*"
+# OSG_RAW_INDEX = "gracc.osg.raw3-2026.05"
 
+s = opensearchpy.Search(using=client, index=OSG_RAW_INDEX)
 
-s = Search(using=es, index=osg_raw_index)
+s = s.query(Match(ProbeName="coffea.casa"))
+s = s.filter("range", CpuDuration={"gte": 30000})
+s = s.filter("range", WallDuration={"lte": 600})
+s = s.filter("range", **{"@timestamp": {"gte": "now-90d", "lte": "now"}})
 
+s = s.query(Q("wildcard", GlobalUsername="*@unl.edu"))
 
-s = s.filter('range', CpuDuration={'gte': 30000})
-s = s.filter('range', WallDuration={'lte': 600})
-s = s.filter('range',  **{'@timestamp': {'gte': 'now-1y', 'lte': 'now'}})
-
-s = s.query(Q('wildcard', GlobalUsername = '*@unl.edu'))
-
+s = s.params(clear_scroll=False)
 
 for hit in s.scan():
     print("{},{}".format(hit.meta.id, hit.meta.index))
-
-
-
