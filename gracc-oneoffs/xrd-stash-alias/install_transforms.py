@@ -6,6 +6,7 @@ Install OpenSearch transform jobs for OSDF summary data.
 
 Usage: python install_transforms.py --url https://opensearch:9200 --user admin --password secret [--insecure]
        [--start-year 2019] [--end-year 2025] [--start-month 1] [--end-month 12] [--clean-target] [--dry-run]
+       python install_transforms.py --print-config [--start-year ...] [--end-year ...] [--start-month ...] [...]
 
 Every completed month gets a one-shot transform (osdf-summary-<year>-<MM>). The rest of the current year,
 from today (UTC) on, gets one continuous "live" transform (osdf-summary-<year>-from-<MM>-<DD>), and the days
@@ -41,19 +42,39 @@ from requests.auth import HTTPBasicAuth
 # Maximum page size a transform accepts; fewer pages means fewer full scans of the source data.
 # A continuous transform re-queries each page of changed buckets with one clause per group per bucket,
 # min(page_size, 1024 / (groups + 1)) = 113 buckets here. Lucene counts a range as 2 clauses, so those
-# buckets take 113 * 9 = 1017 of Lucene's 1024, leaving too few for the data_selection_query (15 with the
-# garbage-counter ranges): it fails with too_many_nested_clauses. 100 buckets per page leaves room.
+# buckets take 113 * 9 = 1017 of Lucene's 1024, leaving too few for the data_selection_query (15 to 20, see
+# query_clauses): it fails with too_many_nested_clauses. 100 buckets per page leaves room.
 PAGE_SIZE = 10000
 CONTINUOUS_PAGE_SIZE = 100
+
+# Lucene's limit on the clauses in one query, counted over the whole query tree (too_many_nested_clauses).
+MAX_NESTED_CLAUSES = 1024
 
 # Pseudo-paths such as "/replicate:0000ca0f" (Purdue EOS replication, Sep 2025 - Jan 2026) give every
 # request its own dirname1/dirname2 value, and so its own bucket (1.6M buckets on 2025-09-12 alone).
 EXCLUDED_DIRNAME1_PREFIXES = ["/replicate:"]
 
-# Records with a garbage transfer counter: any of these fields negative or over 1 PB (324k records, Dec 2025 -
-# Oct 2026, nearly all close records with no matching open). A single one swamps a day's summed bytes.
+# Close records with no matching open and no known login: collector2 writes a close whose file ID matches no
+# open it saw with filename "unknown", so dirname1 "unknown directory", and filesize 0; protocol is "unknown"
+# when it cannot find the login either. Before v2.4.0 (deployed 2026-10-29) it also parsed t-stream (trace)
+# packets with the f-stream layout (xrootd-monitoring-shoveler issue #100), fabricating such closes with
+# read/readv/write garbage at every magnitude, from GB to 9.2e18 (Oct 2026: 1.30M of 1.55B records, carrying
+# 198 PB of the 215 PB read). There are none in the 18.2B records before Dec 2025.
+# Kept: the same closes with a known protocol (0.16 - 0.99 PB a month, nearly all under 0.1 TB each; the few
+# fabricated ones among them are mostly over MAX_TRANSFER_BYTES), and everything from UNMATCHED_CLOSE_UNTIL on.
+# The last fabricated closes are in the 12:00 UTC hour of 2026-10-29, as v2.4.0 rolled out; the 13:00 hour still
+# has a restart burst. From 14:00 on they are real closes whose open the collector missed (every one with
+# read > 0 has read_operations > 0, none reads over 0.72 TB, about 15 TB a day in Nov 2026).
+UNMATCHED_CLOSE_VALUES = {"dirname1.keyword": "unknown directory", "filesize": 0, "protocol.keyword": "unknown"}
+UNMATCHED_CLOSE_UNTIL = "2026-10-29T14:00:00Z"
+
+# Any other record with a garbage transfer counter: any of these fields negative or over 100 TB. A single one
+# swamps a day's summed bytes. A fabricated close that matched a real login or a real open carries a protocol
+# or a real path, so only its counter gives it away (Aug 2026: 44 such "unknown directory" records with
+# protocol https carried 16.7 PB, and 19 with a real path 7.8 PB). No record before Dec 2025 has a counter
+# over 9.4 TB.
 TRANSFER_FIELDS = ["read", "readv", "write"]
-MAX_TRANSFER_BYTES = 10**15
+MAX_TRANSFER_BYTES = 10**14
 
 
 def month_range(year: int, month: int) -> tuple[str, str]:
@@ -68,10 +89,32 @@ def month_range(year: int, month: int) -> tuple[str, str]:
     return start, end
 
 
+def parse_timestamp(timestamp: str) -> datetime:
+    """
+    Parse an @timestamp bound such as "2026-10-29T14:00:00Z".
+    """
+    return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+
+
+def unmatched_close_clauses(start: str, end: str) -> list[dict]:
+    """
+    The must_not clause for close records with no matching open, for a query over [start, end). It applies
+    only before UNMATCHED_CLOSE_UNTIL, so a range that straddles that day gets a time bound, and a range
+    that starts on or after it gets no clause at all.
+    """
+    until = parse_timestamp(UNMATCHED_CLOSE_UNTIL)
+    if parse_timestamp(start) >= until:
+        return []
+    match = [{"term": {field: value}} for field, value in UNMATCHED_CLOSE_VALUES.items()]
+    if parse_timestamp(end) > until:
+        match.append({"range": {"@timestamp": {"lt": UNMATCHED_CLOSE_UNTIL}}})
+    return [{"bool": {"filter": match}}]
+
+
 def build_data_selection_query(start: str, end: str) -> dict:
     """
-    Select source documents in [start, end), leaving out the excluded dirname1 prefixes and the records
-    with a garbage transfer counter.
+    Select source documents in [start, end), leaving out the excluded dirname1 prefixes, the close records
+    with no matching open from before UNMATCHED_CLOSE_UNTIL, and the records with a garbage transfer counter.
     """
     return {
         "bool": {
@@ -80,12 +123,52 @@ def build_data_selection_query(start: str, end: str) -> dict:
             ],
             "must_not": [
                 {"prefix": {"dirname1.keyword": prefix}} for prefix in EXCLUDED_DIRNAME1_PREFIXES
-            ] + [
+            ] + unmatched_close_clauses(start, end) + [
                 {"range": {field: bound}} for field in TRANSFER_FIELDS
                 for bound in ({"lt": 0}, {"gt": MAX_TRANSFER_BYTES})
             ]
         }
     }
+
+
+def query_clauses(query: dict) -> int:
+    """
+    Count the Lucene clauses a query adds toward MAX_NESTED_CLAUSES, as OpenSearch 2.11.1 rewrites it:
+    a range on a date or number is an IndexOrDocValuesQuery (2), a term (on a keyword or a long) or a
+    prefix is 1, and a bool is the sum of its clauses.
+    """
+    (kind, body), = query.items()
+    if kind == "bool":
+        return sum(query_clauses(clause) for occur in ("filter", "must", "must_not", "should")
+                   for clause in body.get(occur, []))
+    if kind == "range":
+        return 2
+    if kind in ("term", "prefix"):
+        return 1
+    raise ValueError(f"no clause count known for a {kind} query; add it to query_clauses")
+
+
+def continuous_page_clauses(config: dict) -> int:
+    """
+    Clauses a continuous transform's per-bucket filter takes for one page of changed buckets:
+    min(page_size, 1024 / (groups + 1)) buckets, each a range for the day (2) and a term per other group (1).
+    """
+    transform = config["transform"]
+    groups = transform["groups"]
+    buckets = min(transform["page_size"], MAX_NESTED_CLAUSES // (len(groups) + 1))
+    return buckets * sum(2 if "date_histogram" in group else 1 for group in groups)
+
+
+def clause_budget(config: dict) -> tuple[int, str]:
+    """
+    Return (clauses used, description) for a transform configuration. Only a continuous transform adds the
+    per-bucket clauses; a one-shot pages with a composite aggregation and uses just its data_selection_query.
+    """
+    query = query_clauses(config["transform"]["data_selection_query"])
+    if not config["transform"]["continuous"]:
+        return query, f"data_selection_query {query} of {MAX_NESTED_CLAUSES}"
+    page = continuous_page_clauses(config)
+    return page + query, f"page {page} + data_selection_query {query} = {page + query} of {MAX_NESTED_CLAUSES}"
 
 
 def day_start(day: date) -> str:
@@ -561,8 +644,9 @@ def ensure_target_index(base_url: str, index_name: str, auth: HTTPBasicAuth, ver
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description='Install OpenSearch transform jobs for OSDF summary data.')
-    p.add_argument('--url', '-u', required=True, help='Base URL of OpenSearch (e.g. https://opensearch.example:9200)')
-    p.add_argument('--user', help='Username for basic auth', required=True)
+    p.add_argument('--url', '-u', help='Base URL of OpenSearch (e.g. https://opensearch.example:9200); '
+                                       'required unless --print-config')
+    p.add_argument('--user', help='Username for basic auth; required unless --print-config')
     p.add_argument('--password', default=os.environ.get('OPENSEARCH_PASSWORD'),
                    help='Password for basic auth (default: $OPENSEARCH_PASSWORD)')
     p.add_argument('--start-year', type=int, default=2019, help='Start year (default: 2019)')
@@ -577,37 +661,25 @@ def parse_args() -> argparse.Namespace:
                         'the target index (required when the range was summarized by a different transform)')
     p.add_argument('--dry-run', action='store_true',
                    help='Only print which transforms would be installed; change nothing')
+    p.add_argument('--print-config', action='store_true',
+                   help='Print the configuration of each transform that would be installed, as JSON on stdout, '
+                        'and its clause count on stderr, without contacting OpenSearch. With no OpenSearch to '
+                        'ask, it plans as if no live transform existed yet.')
     return p.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
+def plan_jobs(args: argparse.Namespace, today: date, existing_live_start) -> list[Job]:
+    """
+    List the transforms to install. existing_live_start(year) returns the start day of the year's live
+    transform, or None if it has none.
 
-    if args.start_year > args.end_year:
-        print(f"Error: start-year ({args.start_year}) must be <= end-year ({args.end_year})", file=sys.stderr)
-        return 1
-    if not 1 <= args.start_month <= args.end_month <= 12:
-        print(f"Error: need 1 <= start-month ({args.start_month}) <= end-month ({args.end_month}) <= 12",
-              file=sys.stderr)
-        return 1
-    if not args.password:
-        print("Error: --password or $OPENSEARCH_PASSWORD is required", file=sys.stderr)
-        return 1
-
-    auth = HTTPBasicAuth(args.user, args.password)
-    verify = not args.insecure
-
-    today = datetime.now(timezone.utc).date()
-    # Completed months are one-shots; the current year from today on is one live transform, and the current
-    # month's days before today are a one-shot that ends where it starts. A future year is one live transform
-    # from Jan 1. Days at or after an existing live transform's start belong to it, so they get no one-shot.
+    Completed months are one-shots; the current year from today on is one live transform, and the current
+    month's days before today are a one-shot that ends where it starts. A future year is one live transform
+    from Jan 1. Days at or after an existing live transform's start belong to it, so they get no one-shot.
+    """
     jobs = []
     for year in range(args.start_year, args.end_year + 1):
-        try:
-            live_start = find_live_transform_start(args.url, year, auth, verify)
-        except requests.RequestException as e:
-            print(f"Error: could not list transforms: {e}", file=sys.stderr)
-            return 1
+        live_start = existing_live_start(year)
         if live_start is not None:
             print(f"ℹ {year}: {live_start.isoformat()} on belongs to live transform {live_transform_id(live_start)}")
         elif year >= today.year:
@@ -621,6 +693,67 @@ def main() -> int:
             last_one_shot = min(args.end_month, live_start.month if live_start.day > 1 else live_start.month - 1)
         jobs.extend(month_job(year, month, live_start) for month in range(args.start_month, last_one_shot + 1))
     jobs.sort(key=lambda job: job.start)
+    return jobs
+
+
+def print_configs(jobs: list[Job], enabled: bool) -> int:
+    """
+    Print each job's transform configuration as one JSON object on stdout, keyed by transform ID, and each
+    one's clause count on stderr. Returns 1 if any is over MAX_NESTED_CLAUSES.
+    """
+    configs = {}
+    over = False
+    for job in jobs:
+        config = create_transform_config(job, enabled=enabled)
+        used, description = clause_budget(config)
+        over |= used > MAX_NESTED_CLAUSES
+        print(f"{job.transform_id}  [{job.start}, {job.end}){'  continuous' if job.live else ''}  "
+              f"clauses: {description}{'  OVER THE LIMIT' if used > MAX_NESTED_CLAUSES else ''}", file=sys.stderr)
+        configs[job.transform_id] = config
+    print(json.dumps(configs, indent=2))
+    return 1 if over else 0
+
+
+def main() -> int:
+    args = parse_args()
+
+    if args.start_year > args.end_year:
+        print(f"Error: start-year ({args.start_year}) must be <= end-year ({args.end_year})", file=sys.stderr)
+        return 1
+    if not 1 <= args.start_month <= args.end_month <= 12:
+        print(f"Error: need 1 <= start-month ({args.start_month}) <= end-month ({args.end_month}) <= 12",
+              file=sys.stderr)
+        return 1
+
+    today = datetime.now(timezone.utc).date()
+
+    if args.print_config:
+        return print_configs(plan_jobs(args, today, lambda year: None), enabled=not args.no_start)
+
+    if not args.url or not args.user:
+        print("Error: --url and --user are required", file=sys.stderr)
+        return 1
+    if not args.password:
+        print("Error: --password or $OPENSEARCH_PASSWORD is required", file=sys.stderr)
+        return 1
+
+    auth = HTTPBasicAuth(args.user, args.password)
+    verify = not args.insecure
+
+    try:
+        jobs = plan_jobs(args, today, lambda year: find_live_transform_start(args.url, year, auth, verify))
+    except requests.RequestException as e:
+        print(f"Error: could not list transforms: {e}", file=sys.stderr)
+        return 1
+
+    # A transform over the clause limit installs fine and fails on its first search that has data
+    for job in jobs:
+        used, description = clause_budget(create_transform_config(job))
+        if used > MAX_NESTED_CLAUSES:
+            print(f"Error: {job.transform_id} would use too many Lucene clauses ({description}); "
+                  f"lower CONTINUOUS_PAGE_SIZE or simplify the data_selection_query", file=sys.stderr)
+            return 1
+
     print(f"Installing {len(jobs)} transform jobs for years {args.start_year}-{args.end_year}")
     print(f"Today: {today.isoformat()} (completed months and this month's earlier days are one-shot, "
           f"the rest is continuous)")
